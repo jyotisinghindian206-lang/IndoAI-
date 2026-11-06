@@ -16,18 +16,25 @@ Its goal is to bring multiple AI capabilities together in one platform while con
 
 ## Current Version
 
-**v18.6.10 — Progressive Creator Identity + Mind Orbit 3D + Listen Fix**
+**v18.6.11 — Gmail Music Sync + Clickable Links**
 
 ### Key Features
 
 - **AI Conversations:** Conversational assistance for general questions and complex tasks.
 - **Multiple AI Integrations:** Supports configured AI providers such as Google Gemini and OpenAI.
-- **Progressive Creator Identity:** Understands its creator's public profile and reveals relevant information progressively, depending on the user's questions.
+- **Progressive Creator Identity:** Understands its creator's public profile and reveals relevant information progressively.
 - **Conversation Awareness:** Uses conversation context to reduce repetitive answers.
 - **Mind Orbit 3D:** An interactive visual element integrated into the interface.
+- **Music Library:** Save and organize songs and playlists.
+- **Gmail-Based Music Sync:** Designed to make saved music libraries available across devices using the same Indo AI account.
+- **Clickable Links:** Supports clickable hyperlinks with blue styling in AI responses.
 - **Listen Feature:** Improved listening-related functionality.
 - **Modern GUI:** Designed for a clean, modern, user-friendly experience.
 - **Continuous Development:** New improvements and capabilities are added as development progresses.
+
+### In Development
+
+- **Enhanced 8D Audio:** Further improvements to spatial audio and the headphone listening experience.
 
 ## Technology Stack
 
@@ -57,7 +64,7 @@ Its goal is to bring multiple AI capabilities together in one platform while con
    pip install -r requirements.txt
    ```
 
-4. Configure your required API keys and environment variables.
+4. Configure the required API keys and environment variables.
 
 5. Start the application using the project's configured startup command.
 
@@ -86,8 +93,10 @@ Inspired by the possibilities of artificial intelligence, space technology, and 
 ## Important Notes
 
 - Indo AI requires correctly configured API credentials for provider-based features.
-- Availability and usage limits depend on the configured providers and hosting environment.
+- Availability and usage limits depend on configured providers and the hosting environment.
+- Cross-device music synchronization requires the appropriate account authentication and persistent cloud storage configuration.
 - Some features may require additional configuration.
+- Spatial audio support may vary depending on the audio source, browser, and listening device.
 - This project is under active development.
 
 ---
