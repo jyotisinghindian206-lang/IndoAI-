@@ -2911,6 +2911,8 @@ class ChatRequest(BaseModel):
     url_inspection: bool = True
     # Set only by the server from the signed-in user's private memory database.
     private_memory_context: str = ""
+    # Server-generated adaptive persona context; never trusted from client input.
+    adaptive_persona_context: str = ""
     # Optional explicit quoted-message context; never used as authentication.
     reply_to_id: str = ""
     reply_context: str = ""
