@@ -56,3 +56,23 @@ INDO_DATA_DIR=/tmp/indo-test python -m unittest discover -s tests -v
 Local verification for this package: application import succeeded and loaded 86 FastAPI routes; Python compilation succeeded; 68 compatible regression tests passed. Live provider requests, OAuth, music playback, voice, image generation, browser workflows and an actual Render deployment were not tested.
 
 Note: `torch` and `diffusers` are intentionally not installed by the Render requirements because they are large optional local-GPU image-generation dependencies. Hosted image providers remain separately configurable.
+
+## Anticipatory Intelligence (Levels 1-3)
+
+The merged v18.10.5 build includes `indo_anticipatory.py`:
+
+- **Topic Awareness:** detects substantive topics and schedules public web research on a bounded background worker pool. Completed findings are cached with source URL, domain, timestamp, expiry and a heuristic confidence score. A newer unrelated topic cancels queued work and stale running results are discarded before persistence.
+- **Predictive Preparation:** creates up to two ranked follow-up candidates and researches only the highest-ranked candidate, reusing the same cache and worker limit to avoid unbounded search/API use.
+- **Continuous Knowledge Building:** maintains per-account topic nodes and co-mention edges. Source-backed findings can be saved as low-importance `learning` memories in the existing encrypted DLM. The graph endpoint can rebuild nodes/relations from DLM after an ephemeral restart.
+
+The chat path reads completed cache entries only and schedules work without awaiting it. Explicit Research mode continues to use the existing foreground evidence pipeline, avoiding duplicate primary searches.
+
+Optional environment settings:
+- `INDO_ANTICIPATORY_ENABLED=1` (set `0` to disable)
+- `INDO_RESEARCH_CACHE_TTL=86400` (seconds; volatile queries use a shorter TTL)
+
+Signed-in, account-scoped endpoints:
+- `GET /api/anticipatory/status`
+- `GET /api/anticipatory/graph?limit=40`
+
+The engine stores public research metadata separately from private DLM content. DLM integration is encrypted and account-scoped; keep the existing `INDO_SESSION_SECRET` stable and configured. The local research cache itself is a performance cache, not the authoritative memory store.

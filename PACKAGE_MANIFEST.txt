@@ -1,8 +1,17 @@
-Indo AI v18.3 complete Render package
-
-Entry point: indo.py
-Required module packages: indo_brain/, indo_core/
-Dependency file: requirements.txt
-Start command: uvicorn indo:app --host 0.0.0.0 --port $PORT
-
-No secrets or user data are included. Preserve the existing persistent data volume.
+Indo AI v18.10.5 merged working package
+Base: v18.3 complete deployment package
+Overlays: v18.10.5 DLM, Anticipatory Levels 1-3, Adaptive Persona Sync, Cross-Session Project Threads, Devil's Advocate Mode
+Preserved: indo_brain/, indo_core/, tests/, FastAPI application, existing UI/assets in base package
+New modules: indo_anticipatory.py, indo_persona_sync.py, indo_project_threads.py, indo_devil_advocate.py
+New endpoints: /api/anticipatory/status, /api/anticipatory/graph, /api/projects/threads, /api/projects/threads/{project_name}
+Supabase state type: project_threads_v1 (encrypted snapshot)
+Requirements include cryptography for encrypted DLM and project-thread snapshots.
+Runtime databases, session secrets, .env files, caches, and user data are intentionally excluded.
+Validation performed: Python compilation, application import, and pytest (82 passed, 6 FastAPI on_event deprecation warnings).
+Not performed: live Supabase credential/network validation, Render deployment, production load test.
+Additional overlay: Hyper-Local Intelligence (opt-in coarse location, Indian context, regional language preference)
+New module: indo_hyperlocal.py
+New endpoints: GET/PUT /api/indo-hyperlocal/profile
+Hyper-local preferences are stored in local SQLite and, when Supabase plus DLM encryption are configured, synced as encrypted state type hyperlocal_profile_v1.
+Validation performed for this package: Python compilation, application import/route registration, pytest (90 passed, 6 existing FastAPI on_event deprecation warnings).
+Live Supabase network sync and Render deployment remain unverified.

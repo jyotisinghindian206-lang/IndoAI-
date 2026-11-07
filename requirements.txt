@@ -12,3 +12,5 @@ reportlab>=4.4
 psutil>=6
 edge-tts>=7
 gTTS>=2.5
+
+cryptography>=42
