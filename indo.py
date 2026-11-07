@@ -85,7 +85,7 @@ from indo_brain.garuda_security import GarudaSecurity, authorize_tool_action, wr
 from indo_brain.knowledge import VersionedKnowledgeStore
 from indo_brain.evaluation import validate_suite as validate_benchmark_suite, run_local_benchmark as run_local_intelligence_benchmark
 
-# Indo AI v18.10.1 — background-safe Mind Orbit automation; Gmail profile and music sync retained
+# Indo AI v18.10.4 — encrypted cloud DLM snapshots; existing music and Orbit features retained
 from fastapi import FastAPI, UploadFile, File, Request
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse, Response, FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -2159,6 +2159,57 @@ def _indo_memory_fact_from_request(req) -> str | None:
     return None
 
 
+def _indo_memory_cloud_sync(user_hash: str, facts: list[str]) -> bool:
+    """Mirror this account's approved personal-memory facts to Supabase."""
+    try:
+        if not _indo_cloud_ready():
+            return False
+        payload = {"version": 1, "facts": facts[:_INDO_MEMORY_MAX_FACTS], "updated_at": int(time.time())}
+        _indo_cloud_put_user_state(user_hash, "personal_memory", payload)
+        return True
+    except Exception as exc:
+        print("[Indo Supabase memory sync failed]", type(exc).__name__)
+        return False
+
+
+def _indo_memory_cloud_merge_into_local(user_hash: str) -> bool:
+    """Restore cloud facts into the local cache; cloud remains the durable copy."""
+    try:
+        if not _indo_cloud_ready():
+            return False
+        row = _indo_cloud_get_user_state(user_hash, "personal_memory")
+        if row is None:
+            # One-time migration: seed the cloud row from existing local facts.
+            legacy_facts = _indo_memory_get_facts_local(user_hash)
+            if legacy_facts:
+                _indo_memory_cloud_sync(user_hash, legacy_facts)
+            return True
+        payload = row.get("payload") if isinstance(row, dict) else None
+        facts = payload.get("facts", []) if isinstance(payload, dict) else []
+        if not isinstance(facts, list):
+            return False
+        clean = []
+        seen = set()
+        for raw in facts[:_INDO_MEMORY_MAX_FACTS]:
+            fact = _indo_memory_clean_fact(raw)
+            if fact and not _looks_like_private_or_sensitive_content(fact) and fact.casefold() not in seen:
+                clean.append(fact); seen.add(fact.casefold())
+        if clean:
+            now = int(time.time())
+            with _INDO_MEMORY_LOCK:
+                conn = _indo_memory_connect()
+                try:
+                    for fact in clean:
+                        conn.execute("INSERT INTO personal_memory(user_key_hash,fact,created_at,updated_at) VALUES(?,?,?,?) ON CONFLICT(user_key_hash,fact) DO UPDATE SET updated_at=MAX(personal_memory.updated_at,excluded.updated_at)", (user_hash, fact, now, now))
+                    conn.commit()
+                finally:
+                    conn.close()
+        return True
+    except Exception as exc:
+        print("[Indo Supabase memory restore fallback]", type(exc).__name__)
+        return False
+
+
 def _indo_memory_save_fact(user: dict | None, fact: str) -> bool:
     user_hash = _indo_memory_user_key(user)
     fact = _indo_memory_clean_fact(fact)
@@ -2181,26 +2232,35 @@ def _indo_memory_save_fact(user: dict | None, fact: str) -> bool:
                 else:
                     conn.execute("INSERT INTO personal_memory(user_key_hash,fact,created_at,updated_at) VALUES(?,?,?,?)", (user_hash, fact, now, now))
                 conn.commit()
-                return True
             finally:
                 conn.close()
+        # Sync the full bounded library, not just the newest fact, so old memories survive redeploys.
+        facts = _indo_memory_get_facts_local(user_hash)
+        _indo_memory_cloud_sync(user_hash, facts)
+        return True
     except sqlite3.Error as exc:
         print("[Indo private memory] Local save failed:", type(exc).__name__)
         return False
+
+
+def _indo_memory_get_facts_local(user_hash: str) -> list[str]:
+    with _INDO_MEMORY_LOCK:
+        conn = _indo_memory_connect()
+        try:
+            rows = conn.execute("SELECT fact FROM personal_memory WHERE user_key_hash=? ORDER BY updated_at DESC LIMIT ?", (user_hash, _INDO_MEMORY_MAX_FACTS)).fetchall()
+            return [str(row["fact"]) for row in rows]
+        finally:
+            conn.close()
 
 
 def _indo_memory_get_facts(user: dict | None) -> list[str]:
     user_hash = _indo_memory_user_key(user)
     if not user_hash:
         return []
+    # Pull durable cloud facts first, then return the merged account-local cache.
+    _indo_memory_cloud_merge_into_local(user_hash)
     try:
-        with _INDO_MEMORY_LOCK:
-            conn = _indo_memory_connect()
-            try:
-                rows = conn.execute("SELECT fact FROM personal_memory WHERE user_key_hash=? ORDER BY updated_at DESC LIMIT ?", (user_hash, _INDO_MEMORY_MAX_FACTS)).fetchall()
-                return [str(row["fact"]) for row in rows]
-            finally:
-                conn.close()
+        return _indo_memory_get_facts_local(user_hash)
     except sqlite3.Error as exc:
         print("[Indo private memory] Local read failed:", type(exc).__name__)
         return []
@@ -2216,9 +2276,12 @@ def _indo_memory_clear(user: dict | None) -> int:
             try:
                 cur = conn.execute("DELETE FROM personal_memory WHERE user_key_hash=?", (user_hash,))
                 conn.commit()
-                return max(0, cur.rowcount)
+                deleted = max(0, cur.rowcount)
             finally:
                 conn.close()
+        # Write an explicit empty cloud state so cleared memories are not restored later.
+        _indo_memory_cloud_sync(user_hash, [])
+        return deleted
     except sqlite3.Error as exc:
         print("[Indo private memory] Local clear failed:", type(exc).__name__)
         return 0
@@ -2361,6 +2424,7 @@ def _indo_dlm_capture(user: dict, req, fact: str | None = None):
     if not candidates:
         return
     identity = str(user.get("user_key") or (user.get("provider", "") + ":" + user.get("email", "")))
+    _indo_dlm_cloud_restore(identity)
     session_id = _indo_dlm_session_key(req)
     for candidate, category, source in candidates:
         project = _indo_dlm_project_hint(message + " " + candidate, category)
@@ -2377,6 +2441,8 @@ def _indo_dlm_capture(user: dict, req, fact: str | None = None):
             project=project, session_id=session_id,
             confidence=confidence, importance=importance, source=source,
         )
+    if candidates:
+        _indo_dlm_cloud_sync(identity)
 
 
 def _indo_memory_prompt(facts: list[str]) -> str:
@@ -2404,6 +2470,7 @@ async def indo_private_memory_get(request: Request):
     dlm_settings = {"enabled": False, "scopes": {}}
     if INDO_DLM:
         identity = str(user.get("user_key") or (user.get("provider", "") + ":" + user.get("email", "")))
+        _indo_dlm_cloud_restore(identity, force=True)
         dlm_rows = INDO_DLM.list_all(identity, limit=500)
         dlm_settings = INDO_DLM.settings(INDO_DLM.user_hash(identity))
     return JSONResponse({"enabled": True, "count": len(facts) + len(dlm_rows), "memories": facts,
@@ -2431,7 +2498,9 @@ async def indo_private_memory_save(request: Request):
     dlm_result = None
     if INDO_DLM:
         identity = str(user.get("user_key") or (user.get("provider", "") + ":" + user.get("email", "")))
+        _indo_dlm_cloud_restore(identity)
         dlm_result = INDO_DLM.save(identity, fact, source="manual_dashboard", confidence=1.0, importance=.85)
+        _indo_dlm_cloud_sync(identity)
     return JSONResponse({"ok": True, "saved": True, "dynamic_memory": dlm_result,
                          "count": len(_indo_memory_get_facts(user)) + (len(INDO_DLM.list_all(identity, limit=500)) if INDO_DLM else 0)})
 
@@ -2445,7 +2514,9 @@ async def indo_private_memory_delete(request: Request):
     dynamic_deleted = 0
     if INDO_DLM:
         identity = str(user.get("user_key") or (user.get("provider", "") + ":" + user.get("email", "")))
+        _indo_dlm_cloud_restore(identity)
         dynamic_deleted = INDO_DLM.delete(identity)
+        _indo_dlm_cloud_sync(identity)
     return JSONResponse({"ok": True, "deleted_count": deleted + dynamic_deleted, "count": 0})
 
 
@@ -2459,7 +2530,9 @@ async def indo_dlm_settings_update(request: Request):
     try:
         body = await request.json()
         identity = str(user.get("user_key") or (user.get("provider", "") + ":" + user.get("email", "")))
+        _indo_dlm_cloud_restore(identity)
         settings = INDO_DLM.update_settings(INDO_DLM.user_hash(identity), body.get("enabled"), body.get("scopes") if isinstance(body.get("scopes"), dict) else None)
+        _indo_dlm_cloud_sync(identity)
         return JSONResponse({"ok": True, "settings": settings})
     except Exception as exc:
         return JSONResponse({"error": "Could not update memory settings: " + type(exc).__name__}, status_code=400)
@@ -2473,7 +2546,10 @@ async def indo_dlm_memory_delete_one(memory_id: str, request: Request):
     if not INDO_DLM:
         return JSONResponse({"error": "Encrypted DLM is unavailable."}, status_code=503)
     identity = str(user.get("user_key") or (user.get("provider", "") + ":" + user.get("email", "")))
-    return JSONResponse({"ok": True, "deleted_count": INDO_DLM.delete(identity, memory_id=memory_id)})
+    _indo_dlm_cloud_restore(identity)
+    deleted = INDO_DLM.delete(identity, memory_id=memory_id)
+    _indo_dlm_cloud_sync(identity)
+    return JSONResponse({"ok": True, "deleted_count": deleted})
 
 
 @app.get("/api/memory/export")
@@ -2484,6 +2560,7 @@ async def indo_dlm_memory_export(request: Request):
     if not INDO_DLM:
         return JSONResponse({"error": "Encrypted DLM is unavailable."}, status_code=503)
     identity = str(user.get("user_key") or (user.get("provider", "") + ":" + user.get("email", "")))
+    _indo_dlm_cloud_restore(identity, force=True)
     return JSONResponse(INDO_DLM.export(identity), headers={"Cache-Control": "private, no-store"})
 
 
@@ -2570,6 +2647,7 @@ def _indo_cloud_session_clean(session):
     clean = dict(session)
     clean["id"] = sid
     clean["title"] = str(session.get("title") or "New Conversation")[:120]
+    clean["titleManuallySet"] = bool(session.get("titleManuallySet", False))
     clean["mode"] = str(session.get("mode") or "New Chat")[:80]
     clean["messages"] = clean_messages
     clean["updatedAt"] = int(session.get("updatedAt") or session.get("updated_at") or 0)
@@ -7249,11 +7327,11 @@ def _indo_supabase_call(method: str, endpoint: str, payload=None):
         "Content-Type": "application/json",
         "Accept": "application/json",
         "Prefer": "resolution=merge-duplicates,return=representation" if method == "POST" else "return=representation",
-        "User-Agent": "IndoAI/18.10.2",
+        "User-Agent": "IndoAI/18.10.4",
     })
     with urllib.request.urlopen(req, timeout=8) as response:
-        raw = response.read(1024 * 1024 + 1)
-    if len(raw) > 1024 * 1024:
+        raw = response.read(8 * 1024 * 1024 + 1)
+    if len(raw) > 8 * 1024 * 1024:
         raise ValueError("Supabase response exceeded the size limit")
     return json.loads(raw.decode("utf-8")) if raw else []
 
@@ -7268,6 +7346,57 @@ def _indo_cloud_put_user_state(user_id: str, state_type: str, payload: dict):
            "updated_at": datetime.datetime.now(datetime.timezone.utc).isoformat()}
     query = urllib.parse.urlencode({"on_conflict": "user_id,state_type"})
     return _indo_supabase_call("POST", "/rest/v1/indo_user_state?" + query, [row])
+
+
+# Encrypted DLM snapshots are the durable source of truth; SQLite remains a fast
+# local cache. A short process cache avoids a Supabase round-trip on every message.
+_INDO_DLM_CLOUD_CACHE = {}
+_INDO_DLM_CLOUD_CACHE_LOCK = threading.RLock()
+_INDO_DLM_CLOUD_CACHE_TTL = 45
+
+def _indo_dlm_cloud_sync(identity: str) -> bool:
+    if not INDO_DLM or not _indo_cloud_ready() or not identity:
+        return False
+    try:
+        user_hash = INDO_DLM.user_hash(identity)
+        encrypted = INDO_DLM.cloud_export(identity)
+        _indo_cloud_put_user_state(user_hash, "dynamic_memory_v1", {
+            "version": 1, "encrypted_snapshot": encrypted, "updated_at": int(time.time())
+        })
+        with _INDO_DLM_CLOUD_CACHE_LOCK:
+            _INDO_DLM_CLOUD_CACHE[user_hash] = time.time()
+        return True
+    except Exception as exc:
+        print("[Indo DLM cloud sync warning]", type(exc).__name__)
+        return False
+
+def _indo_dlm_cloud_restore(identity: str, force: bool = False) -> bool:
+    if not INDO_DLM or not _indo_cloud_ready() or not identity:
+        return False
+    try:
+        user_hash = INDO_DLM.user_hash(identity)
+        now = time.time()
+        with _INDO_DLM_CLOUD_CACHE_LOCK:
+            cached = _INDO_DLM_CLOUD_CACHE.get(user_hash, 0)
+            if not force and now - cached < _INDO_DLM_CLOUD_CACHE_TTL:
+                return True
+        row = _indo_cloud_get_user_state(user_hash, "dynamic_memory_v1")
+        if row is None:
+            # First-use migration: encrypt and upload any surviving local DLM data.
+            _indo_dlm_cloud_sync(identity)
+            return True
+        payload = row.get("payload") if isinstance(row, dict) else None
+        encrypted = payload.get("encrypted_snapshot") if isinstance(payload, dict) else None
+        if not encrypted:
+            raise ValueError("cloud_snapshot_missing")
+        INDO_DLM.cloud_import(identity, encrypted)
+        with _INDO_DLM_CLOUD_CACHE_LOCK:
+            _INDO_DLM_CLOUD_CACHE[user_hash] = now
+        return True
+    except Exception as exc:
+        # Keep the local encrypted cache available if cloud restore is temporarily down.
+        print("[Indo DLM cloud restore fallback]", type(exc).__name__)
+        return False
 
 @app.get("/api/music/library/state")
 def indo_music_library_state_get(request: Request):
@@ -8200,9 +8329,10 @@ async def generate_title(req: TitleRequest):
                 response = client.models.generate_content(
                     model=MODEL,
                     contents=(
-                        "Create a concise, useful title for this chat. 3 to 6 words, "
-                        "natural title case, no quotation marks, no emoji, no ending punctuation. "
-                        "Summarize the main topic rather than copying the user's first sentence. "
+                        "Create a concise, specific title for this conversation. 3 to 6 words. "
+                        "Use natural title case, no quotation marks, emoji, numbering, or ending punctuation. "
+                        "Name the actual project, question, subject, or task; avoid generic labels such as Chat or Help. "
+                        "Summarize the conversation's main topic rather than copying the user's first sentence. "
                         "Return only the title.\n\nConversation:\n" + history_text
                     ),
                     config=types.GenerateContentConfig(temperature=0.2, max_output_tokens=32),
@@ -13416,8 +13546,10 @@ function renderHistory() {
                 return;
             }
             session.title = cleanTitle;
+            session.titleManuallySet = true;
             if (currentSession && currentSession.id === session.id) {
                 currentSession.title = cleanTitle;
+                currentSession.titleManuallySet = true;
                 updateUI();
             }
             saveSessions();
@@ -18403,7 +18535,7 @@ function renderPersistentGeneratedFile(container, attachment) {
    ============================================================ */
 
 async function generateTitle() {
-    if (!currentSession || currentSession.title !== "New Conversation") return;
+    if (!currentSession || currentSession.title !== "New Conversation" || currentSession.titleManuallySet) return;
     const sessionId = currentSession.id;
     const history = currentSession.messages.map(m => ({role: m.role, content: String(m.content || "").slice(0, 1200)}));
     const first = history.find(m => m.role === "user" && m.content.trim());
@@ -18418,7 +18550,7 @@ async function generateTitle() {
     try {
         const response = await fetch("/api/title", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({history})});
         const data = await response.json();
-        if (response.ok && data.title && currentSession && currentSession.id === sessionId) {
+        if (response.ok && data.title && currentSession && currentSession.id === sessionId && !currentSession.titleManuallySet) {
             currentSession.title = String(data.title).trim().slice(0, 58) || currentSession.title;
             updateUI();
             saveSessions();
@@ -21870,7 +22002,7 @@ html[data-ui-theme="flow"] .settings-row > div, html[data-ui-theme="flow"] .indo
       if(next===null)return;
       const clean=next.replace(/\s+/g,' ').trim().slice(0,90);
       if(!clean){window.alert('A chat name cannot be empty.');return;}
-      session.title=clean;
+      session.title=clean; session.titleManuallySet=true;
       if(typeof saveSessions==='function')saveSessions();
       if(typeof updateUI==='function')updateUI();
       if(typeof renderHistory==='function')renderHistory();
@@ -25946,10 +26078,14 @@ async def chat_stream(req: ChatRequest, request: Request):
     # It is never written to the reusable answer dataset or shared between accounts.
     user = _indo_current_user(request)
     if user and _indo_memory_is_text_chat(req):
+        if INDO_DLM:
+            _indo_dlm_cloud_restore(str(user.get("user_key") or (user.get("provider", "") + ":" + user.get("email", ""))))
         if _indo_memory_clear_requested(req.message):
             _indo_memory_clear(user)
             if INDO_DLM:
-                INDO_DLM.delete(str(user.get("user_key") or (user.get("provider", "") + ":" + user.get("email", ""))))
+                _clear_identity = str(user.get("user_key") or (user.get("provider", "") + ":" + user.get("email", "")))
+                INDO_DLM.delete(_clear_identity)
+                _indo_dlm_cloud_sync(_clear_identity)
             req.private_memory_context = ""
         else:
             fact = _indo_memory_fact_from_request(req)
@@ -25974,16 +26110,38 @@ async def chat_stream(req: ChatRequest, request: Request):
     # Any unexpected generator error is converted into text instead of killing
     # the streaming response and producing a browser-level "NetworkError".
     def safe_stream():
+        captured = []
+        completed = False
         try:
             for chunk in stream_response(req):
                 if chunk is not None:
-                    yield str(chunk)
+                    piece = str(chunk)
+                    captured.append(piece)
+                    yield piece
+            completed = True
         except GeneratorExit:
             return
         except Exception as exc:
             # Never expose internal tracebacks or implementation markers.
             yield "I'm experiencing high demand or a temporary service issue right now. Please try again in a little while; your message is still here."
             print("[Indo AI stream error]", repr(exc))
+        finally:
+            # Durable episodic memory: save each completed user/assistant turn, not
+            # just explicitly phrased facts. Content remains encrypted and account-scoped.
+            # Sensitive-looking user turns are skipped by the DLM safety filter.
+            if completed and user and INDO_DLM and _indo_memory_is_text_chat(req):
+                try:
+                    _archive_identity = str(user.get("user_key") or (user.get("provider", "") + ":" + user.get("email", "")))
+                    _assistant_text = "".join(captured)
+                    _assistant_text = re.sub(re.escape(WEB_SOURCE_MARKER) + r".*?" + re.escape(WEB_SOURCE_END), "", _assistant_text, flags=re.S)
+                    _assistant_text = _assistant_text[:6000]
+                    _archive_project = _indo_dlm_project_hint(req.message, INDO_DLM.classify(req.message))
+                    _saved_episode = INDO_DLM.archive_turn(_archive_identity, req.message, _assistant_text,
+                        session_id=_indo_dlm_session_key(req), project=_archive_project)
+                    if _saved_episode.get("saved"):
+                        _indo_dlm_cloud_sync(_archive_identity)
+                except Exception as _archive_exc:
+                    print("[Indo DLM episode archive warning]", type(_archive_exc).__name__)
 
     return StreamingResponse(
         safe_stream(),
