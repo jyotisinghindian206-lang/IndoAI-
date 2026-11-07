@@ -1,8 +1,0 @@
-Indo AI v18.3 complete Render package
-
-Entry point: indo.py
-Required module packages: indo_brain/, indo_core/
-Dependency file: requirements.txt
-Start command: uvicorn indo:app --host 0.0.0.0 --port $PORT
-
-No secrets or user data are included. Preserve the existing persistent data volume.
