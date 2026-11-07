@@ -85,7 +85,7 @@ from indo_brain.garuda_security import GarudaSecurity, authorize_tool_action, wr
 from indo_brain.knowledge import VersionedKnowledgeStore
 from indo_brain.evaluation import validate_suite as validate_benchmark_suite, run_local_benchmark as run_local_intelligence_benchmark
 
-# Indo AI v5.43 — animated aura mini music dock, persistent music library, delete controls
+# Indo AI v18.10.1 — background-safe Mind Orbit automation; Gmail profile and music sync retained
 from fastapi import FastAPI, UploadFile, File, Request
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse, Response, FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -20542,7 +20542,7 @@ indoApplyCodeHighlighting();
   let indoLocalIndex = -1;
   let indoLocalUrls = [];
   let indoEqContext = null, indoEqSource = null, indoEqFilters = null;
-  let indoOrbitPanner = null, indoOrbitDryGain = null, indoOrbitWetGain = null, indoOrbitFrame = 0, indoOrbitEnabled = (function(){try{return localStorage.getItem('indo_music_mind_orbit')==='true';}catch(_){return false;}})(), indoOrbitStartedAt = 0, indoOrbitPhase = 0, indoOrbitLastFrameAt = 0;
+  let indoOrbitPanner = null, indoOrbitDryGain = null, indoOrbitWetGain = null, indoOrbitFrame = 0, indoOrbitEnabled = (function(){try{return localStorage.getItem('indo_music_mind_orbit')==='true';}catch(_){return false;}})(), indoOrbitStartedAt = 0, indoOrbitPhase = 0, indoOrbitLastFrameAt = 0, indoOrbitScheduledUntil = 0, indoOrbitScheduleTimer = 0;
   const indoEqSourceByPlayer = new WeakMap();
   let indoAuraAnalyser = null, indoAuraFrequencyData = null, indoAuraFrame = 0, indoAuraEnergy = 0, indoAuraLastEnergy = 0, indoAuraKick = 0;
   function setMusicTab(which){
@@ -20711,7 +20711,7 @@ indoApplyCodeHighlighting();
     const files=Array.from(fileList||[]).filter(f=>f&&(/^audio\//i.test(f.type)||/\.(mp3|m4a|aac|wav|ogg|flac|opus|webm)$/i.test(f.name||'')));
     const status=byId('indoMusicStatus');
     if(!files.length){if(status)status.textContent='No supported audio files were selected. Try MP3, M4A, WAV, OGG, FLAC, AAC, or OPUS.';return;}
-    if(!confirm('Upload '+files.length+' selected audio file(s) into your private Indo Music account library? Each file must be 150 MB or smaller. Cross-device/redeploy persistence requires a Render persistent disk or configured S3-compatible cloud backup.'))return;
+    if(!confirm('Upload '+files.length+' selected audio file(s) into your private Indo Music account library? Each file must be 150 MB or smaller. Cross-device and restart persistence requires a Render persistent disk mounted at /var/data (INDO_DATA_DIR=/var/data), or configured S3-compatible cloud backup.'))return;
     let saved=0,failed=0; if(status)status.textContent='Saving selected songs into Indo Music…';
     for(const file of files){
       const ext=(file.name.match(/\.[^.]+$/)||[''])[0].toLowerCase();
@@ -20721,7 +20721,7 @@ indoApplyCodeHighlighting();
       if(status)status.textContent='Saving songs to Indo Music… '+saved+' saved, '+failed+' skipped/failed.';
     }
     await refreshDownloadedTracks();indoLocalIndex=-1;
-    if(status)status.textContent='Saved '+saved+' song(s) in your Indo account library. '+failed+' file(s) skipped or failed. Cross-device/redeploy persistence requires a Render persistent disk or configured S3-compatible cloud backup.';
+    if(status)status.textContent='Saved '+saved+' song(s) in your Indo account library. '+failed+' file(s) skipped or failed. Cross-device and restart persistence requires a Render persistent disk mounted at /var/data (INDO_DATA_DIR=/var/data), or configured S3-compatible cloud backup.';
   }
   function updateFluidAuraVisuals(dock,level,now){
     // Intentionally no-op: no fluid, flame, glow, or beat-reactive expansion remains.
@@ -20748,6 +20748,7 @@ indoApplyCodeHighlighting();
     }
     try{
       indoEqContext=new AC();
+      indoEqContext.addEventListener?.('statechange',()=>{if(indoOrbitEnabled&&indoEqContext.state==='running')scheduleIndoOrbitAudioTimeline(true);});
       // Indo Signature: restrained, music-first tuning. Avoid huge boosts or clipping.
       const bass=indoEqContext.createBiquadFilter();bass.type='lowshelf';bass.frequency.value=115;bass.gain.value=2.5;
       const mids=indoEqContext.createBiquadFilter();mids.type='peaking';mids.frequency.value=900;mids.Q.value=0.85;mids.gain.value=-0.4;
@@ -20856,35 +20857,66 @@ indoApplyCodeHighlighting();
     const close=document.createElement('button');close.type='button';close.textContent='Close';close.addEventListener('click',()=>{panel.hidden=true;});panel.appendChild(close);
     number.focus();
   }
+  // Schedule the spatial path on the Web Audio clock, not only requestAnimationFrame.
+  // Browsers heavily throttle RAF when the user switches to Roblox/another app; audio
+  // automation keeps Mind Orbit moving while the Indo tab is in the background.
+  function scheduleIndoOrbitAudioTimeline(forceReset=false){
+    const ctx=indoEqContext,panner=indoOrbitPanner;
+    if(!indoOrbitEnabled||!ctx||!panner||ctx.state!=='running')return;
+    const speed=Math.PI*2/10.8,cycle=10.8,samples=128,now=ctx.currentTime;
+    const params=panner.positionX&&panner.positionY&&panner.positionZ?[panner.positionX,panner.positionY,panner.positionZ]:null;
+    if(!params)return; // Legacy setPosition fallback remains driven by RAF below.
+    if(forceReset||indoOrbitScheduledUntil<now+0.05){
+      params.forEach(param=>param.cancelScheduledValues(now));
+      const angle=indoOrbitPhase;
+      params[0].setValueAtTime(Math.sin(angle)*1.58+0.10*Math.sin(angle*3),now);
+      params[1].setValueAtTime(0.34*Math.sin(angle*2+0.35)+0.06*Math.sin(angle*3),now);
+      params[2].setValueAtTime(-Math.cos(angle)*1.58+0.08*Math.cos(angle*2),now);
+      indoOrbitScheduledUntil=now+0.05;
+    }
+    // Keep ten minutes of motion queued. This is cheap (three short automation curves
+    // per revolution) and outlives normal background-tab timer throttling by a wide margin.
+    const start=Math.max(now+0.05,indoOrbitScheduledUntil);
+    const cycles=Math.max(0,Math.ceil((now+600-start)/cycle));
+    for(let c=0;c<cycles;c++){
+      const t=start+c*cycle,curves=[new Float32Array(samples),new Float32Array(samples),new Float32Array(samples)];
+      for(let i=0;i<samples;i++){
+        const elapsed=(t-now)+(i/(samples-1))*cycle;
+        const a=indoOrbitPhase+elapsed*speed,r=1.58+0.10*Math.sin(a*2);
+        curves[0][i]=Math.sin(a)*r+0.10*Math.sin(a*3);
+        curves[1][i]=0.34*Math.sin(a*2+0.35)+0.06*Math.sin(a*3);
+        curves[2][i]=-Math.cos(a)*r+0.08*Math.cos(a*2);
+      }
+      params[0].setValueCurveAtTime(curves[0],t,cycle);
+      params[1].setValueCurveAtTime(curves[1],t,cycle);
+      params[2].setValueCurveAtTime(curves[2],t,cycle);
+    }
+    indoOrbitScheduledUntil=start+cycles*cycle;
+  }
   function setIndoMindOrbit(enabled,announce=true){
     indoOrbitEnabled=!!enabled;
     try{localStorage.setItem('indo_music_mind_orbit',indoOrbitEnabled?'true':'false');}catch(_){}
     const btn=byId('indoMusicOrbitBtn');if(btn){btn.setAttribute('aria-pressed',String(indoOrbitEnabled));btn.textContent=indoOrbitEnabled?'🌀 Mind Orbit: On':'🌀 Mind Orbit: Off';btn.title=indoOrbitEnabled?'Turn off the 3D audio orbit effect':'Enable the 3D audio orbit effect for stereo headphones';}
     if(indoEqContext&&indoOrbitDryGain&&indoOrbitWetGain){const t=indoEqContext.currentTime;indoOrbitDryGain.gain.cancelScheduledValues(t);indoOrbitWetGain.gain.cancelScheduledValues(t);indoOrbitDryGain.gain.setTargetAtTime(indoOrbitEnabled?0:1,t,0.08);indoOrbitWetGain.gain.setTargetAtTime(indoOrbitEnabled?1:0,t,0.08);}
     if(indoOrbitEnabled){
-      // Anchor the orbit to the current phase. Absolute time prevents frame-rate
-      // throttling or dropped frames from making the orbit gradually slow down.
       const orbitSpeed=Math.PI*2/10.8;
       indoOrbitStartedAt=performance.now()-(indoOrbitPhase/orbitSpeed)*1000;
       indoOrbitLastFrameAt=0;
+      scheduleIndoOrbitAudioTimeline(true);
+      if(indoOrbitScheduleTimer)clearInterval(indoOrbitScheduleTimer);
+      // Refill the automation queue periodically; the ten-minute queue keeps working even
+      // when background-tab timers are delayed while another desktop app is in front.
+      indoOrbitScheduleTimer=setInterval(()=>scheduleIndoOrbitAudioTimeline(false),30000);
       if(!indoOrbitFrame){
         const orbitTick=now=>{
           if(!indoOrbitEnabled){indoOrbitFrame=0;indoOrbitLastFrameAt=0;return;}
           const elapsed=Math.max(0,(now-indoOrbitStartedAt)/1000);
           indoOrbitPhase=(elapsed*orbitSpeed)%(Math.PI*2);
           indoOrbitLastFrameAt=now;
-          if(indoEqContext&&indoOrbitPanner){
-            const angle=indoOrbitPhase;
-            const radius=1.58+0.10*Math.sin(angle*2);
-            const x=Math.sin(angle)*radius+0.10*Math.sin(angle*3);
-            const y=0.34*Math.sin(angle*2+0.35)+0.06*Math.sin(angle*3);
-            const z=-Math.cos(angle)*radius+0.08*Math.cos(angle*2);
-            const t=indoEqContext.currentTime;
-            if(indoOrbitPanner.positionX){
-              indoOrbitPanner.positionX.setTargetAtTime(x,t,0.045);
-              indoOrbitPanner.positionY.setTargetAtTime(y,t,0.045);
-              indoOrbitPanner.positionZ.setTargetAtTime(z,t,0.045);
-            }else indoOrbitPanner.setPosition(x,y,z);
+          // Visual/audio-clock automation handles modern browsers. Keep the legacy path alive.
+          if(indoEqContext&&indoOrbitPanner&&!indoOrbitPanner.positionX){
+            const angle=indoOrbitPhase,radius=1.58+0.10*Math.sin(angle*2);
+            indoOrbitPanner.setPosition(Math.sin(angle)*radius+0.10*Math.sin(angle*3),0.34*Math.sin(angle*2+0.35)+0.06*Math.sin(angle*3),-Math.cos(angle)*radius+0.08*Math.cos(angle*2));
           }
           indoOrbitFrame=requestAnimationFrame(orbitTick);
         };
@@ -20892,12 +20924,23 @@ indoApplyCodeHighlighting();
       }
     }else{
       if(indoOrbitFrame){cancelAnimationFrame(indoOrbitFrame);indoOrbitFrame=0;}
-      indoOrbitLastFrameAt=0;
-      if(indoOrbitPanner){const t=indoEqContext?.currentTime||0;if(indoOrbitPanner.positionX){indoOrbitPanner.positionX.setTargetAtTime(0,t,0.08);indoOrbitPanner.positionY.setTargetAtTime(0,t,0.08);indoOrbitPanner.positionZ.setTargetAtTime(-1,t,0.08);}else indoOrbitPanner.setPosition(0,0,-1);}
+      if(indoOrbitScheduleTimer){clearInterval(indoOrbitScheduleTimer);indoOrbitScheduleTimer=0;}
+      indoOrbitLastFrameAt=0;indoOrbitScheduledUntil=0;
+      if(indoOrbitPanner&&indoEqContext){
+        const t=indoEqContext.currentTime;
+        if(indoOrbitPanner.positionX){
+          [indoOrbitPanner.positionX,indoOrbitPanner.positionY,indoOrbitPanner.positionZ].forEach((param,i)=>{param.cancelScheduledValues(t);param.setTargetAtTime(i===2?-1:0,t,0.08);});
+        }else indoOrbitPanner.setPosition(0,0,-1);
+      }
     }
-    if(announce){const status=byId('indoMusicStatus');if(status)status.textContent=indoOrbitEnabled?'Mind Orbit enabled. The HRTF sound field continuously circles around your listening position; stereo headphones are recommended.':'Mind Orbit disabled. Normal stereo playback restored.';}
+    if(announce){const status=byId('indoMusicStatus');if(status)status.textContent=indoOrbitEnabled?'Mind Orbit enabled. Its 3D audio path is scheduled on the audio clock, so it keeps circling while you use another app. Stereo headphones are recommended.':'Mind Orbit disabled. Normal stereo playback restored.';}
     return indoOrbitEnabled;
   }
+  document.addEventListener('visibilitychange',()=>{
+    if(!indoOrbitEnabled)return;
+    if(indoEqContext&&indoEqContext.state==='running')scheduleIndoOrbitAudioTimeline(false);
+    else if(indoEqContext&&indoEqContext.state==='suspended')indoEqContext.resume().then(()=>scheduleIndoOrbitAudioTimeline(false)).catch(()=>{});
+  });
   function applyMusicEq(){
     if(!indoEqFilters)return;const local=byId('indoMusicLocalPlayer'),online=byId('indoMusicPlayer');if(local&&local.currentSrc&&(!local.paused||local.style.display!=='none'))connectIndoEqPlayer(local);if(online&&online.currentSrc&&online.style.display!=='none')connectIndoEqPlayer(online);const ids=['indoEqBass','indoEqMids','indoEqTreble'],valIds=['indoEqBassVal','indoEqMidsVal','indoEqTrebleVal'];
     ids.forEach((id,i)=>{const el=byId(id);if(!el)return;const value=Number(el.value)||0;indoEqFilters[i].gain.setTargetAtTime(value,indoEqContext.currentTime,0.025);const out=byId(valIds[i]);if(out)out.textContent=(value>0?'+':'')+value.toFixed(1)+' dB';});saveIndoEqValues();
